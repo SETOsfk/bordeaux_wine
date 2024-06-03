@@ -1,4 +1,4 @@
-# Load necessary libraries
+#Gerekli kütüphanelerin yüklenmesi
 library(caret)
 library(xgboost)
 library(randomForest)
@@ -9,7 +9,7 @@ library(ROSE)
 library(e1071)
 library(ada)
 
-#Veri setini oluşturduk
+#Veri setinin oluşturulması
 wine<-BordeauxWines
 str(wine) #Öncelikle karakter tiplerini görmek için veri setini inceliyoruz
 #İlk dört sütun harici bütün değerlerin faktör olması gerekirken double olarak işaretlenmiş
@@ -18,18 +18,15 @@ wine<-wine[,-1:-4]
 #Ardından double olan değişkenler faktöre dönüştürülüyor
 wine<- wine %>% mutate_if(is.double,as.factor)
 str(wine)
-#Bazı faktörler sadece 0 olarak işaretlenmiş modeli eğitmede bir katkıda bulunmayacağını düşündüğüm için
-#veri setinden çıkardım.
+#Bazı faktörler sadece 0 olarak işaretlenmiş yani varyansları sıfır bu nedenden dolayı modelden çıkarıldı.
 cols_to_remove <- sapply(wine, function(x) is.factor(x) && length(levels(x)) == 1)
 wine_main<-wine[,!cols_to_remove]
 #Hepsi faktör ve 0,1 olmak üzre iki levele sahip
 str(wine_main)
-#Çıkarılan sütunlar da veri setine geri ekleniyor ve son olarak YIL değişkeninin sınıf dönüşümü yapılıyor.
-birlestir<-BordeauxWines[,1:4]
-wine_main<-data.frame(birlestir,wine_main)
-wine_main$Year<-as.Date(wine_main$Year)
 
-#Skor değişkeni 90dan fazla olanlar ve 89dan az olanlar şeklinde ikiye ayrılıyor.
+
+#Skor değişkeni 90dan fazla olanlar ve 89dan az olanlar şeklinde ikiye ayrılıyor,
+# ve değerler 90+ skora sahipler X1 diğerleriyse X0 olmak üzre yeni yaratılan "Diagnose" sütununa kaydediliyor.
 Diagnose <- c(1:14349)
 wine_main<-data.frame(wine_main,Diagnose)
 wine_main <- wine_main %>%
@@ -38,8 +35,6 @@ wine_main <- wine_main %>%
     Score >=90 ~"X1",)) %>% 
   select(Diagnose,Score,Name,Year,Price,everything())
 wine_main$Diagnose<-as.factor(wine_main$Diagnose)
-wine_main<- wine_main %>% select(-Year,-Name,-Price,-Score) #olduğunca sade bir subset elde etmek amacıyla
-#skora etkisi olmayan değişkenler veri setinden atılıyor.
 str(wine_main$Diagnose)
 
 
@@ -56,7 +51,7 @@ head(importance_scores)
 
 str(importance_scores)
 
-# If importance_scores is a matrix, extract the correct column
+# If importance_scores is a matrix, extract the correct column Eğer importance_scores bir matrisse, doğru sütunu kaydet.
 # Typically the first column contains MeanDecreaseAccuracy or MeanDecreaseGini
 if (is.matrix(importance_scores)) {
   importance_values <- importance_scores[, 1] # Change 1 if another column is needed
@@ -74,12 +69,12 @@ important_features <- names(sorted_importance)[1:50]
 
 print(important_features)
 
-#İsmleri ve DİAGNOSE sütununu farklı bir veri setine al
+#İsmleri ve Diagnose sütununu farklı bir veri setine al
 X_reduced <- wine_main[,c(important_features)]
 Diagnose<-wine_main$Diagnose
 X_reduced<- data.frame(Diagnose,X_reduced) 
 
-# 2. Train-Test Split
+# 2. Train-Test olarak 0.7 oranında veri setini böldük.
 trainIndex <- createDataPartition(X_reduced$Diagnose, p = .7, 
                                   list = FALSE, 
                                   times = 1)
@@ -93,12 +88,13 @@ barplot(prop.table(table(X_reduced$Diagnose)),
         col = rainbow(2),
         ylim = c(0, 0.7),
         main = "Sınıf Dağılımı")
-
 #Sınıflar arası denge sorunu olduğu görülüyor
 
 bothq <- ovun.sample(Diagnose~., data = train_data, method = "both")
 train_data<-bothq$data
 #Denge sorununu hem under hem oversampling yaparak çöz.
+#"both" yöntemi hem over hem de undersampling yöntemini birleştirir. Azınlık sınıfı için sentetik veriler üretirken 
+#aynı zamanda çoğunluk sınıfındaki örnek sayısını azaltarak sınıfları dengeler.
 
 barplot(prop.table(table( train_data$Diagnose)),
         col = rainbow(2),
