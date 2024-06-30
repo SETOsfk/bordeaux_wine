@@ -1,1 +1,513 @@
-{"metadata":{"kernelspec":{"name":"ir","display_name":"R","language":"R"},"language_info":{"mimetype":"text/x-r-source","name":"R","pygments_lexer":"r","version":"3.6.0","file_extension":".r","codemirror_mode":"r"},"kaggle":{"accelerator":"none","dataSources":[{"sourceId":959381,"sourceType":"datasetVersion","datasetId":522416}],"dockerImageVersionId":30618,"isInternetEnabled":true,"language":"r","sourceType":"notebook","isGpuEnabled":false}},"nbformat_minor":4,"nbformat":4,"cells":[{"source":"<a href=\"https://www.kaggle.com/code/sertanafak/bordeaux-wine-classification-93-5-roc?scriptVersionId=182254046\" target=\"_blank\"><img align=\"left\" alt=\"Kaggle\" title=\"Open in Kaggle\" src=\"https://kaggle.com/static/images/open-in-kaggle.svg\"></a>","metadata":{},"cell_type":"markdown"},{"cell_type":"code","source":"#Necessary packages.\nlibrary(caret)\nlibrary(randomForest)\nlibrary(dplyr)\nlibrary(tidyverse)\nlibrary(ROSE)\nlibrary(ada)\nlibrary(pROC)","metadata":{"_uuid":"ec351ae5-c900-4929-a43c-740275824c3c","_cell_guid":"5a480fd3-eb47-4239-a347-db6b1b7ff81a","collapsed":false,"_execution_state":"idle","jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"#Creating the dataset\nwine<-read_csv(\"/kaggle/input/bordeaux-wine-reviews-from-2000-to-2016/BordeauxWines.csv\")\n#To seperate first four columns so we can do the transformation.\nmerge<-wine[,1:4]\nwine<-wine[,-1:-4]\n#Transforming double's to factors\nwine<- wine %>% mutate_if(is.double,as.factor)","metadata":{"_uuid":"2dc92969-3b27-4257-895c-a652bfe2336b","_cell_guid":"18f5a69c-28bc-4792-bd5a-b9a5b5c3cf67","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"First we need to check data types for better analysis. All of the columns except first four column coded as double but they need to be two levelled factors.Some factors only has one level which is \"0\". This creates zero variance so that is not gonna effect the model because of that, we will remove them. What we are looking for is what makes a wine good. So we will group scores as 1 and 0 which means 90+ score wines and 90- score wines. To do this we will create a column called \"Diagnose\"","metadata":{"_uuid":"d16a56ae-a7fa-4c2c-a5da-4030868b5a92","_cell_guid":"80536020-a324-4148-a9f9-37d012cc8da2","trusted":true}},{"cell_type":"code","source":"#To remove which only has one level.\ncols_to_remove <- sapply(wine, function(x) is.factor(x) && length(levels(x)) == 1)\nwine_main<-wine[,!cols_to_remove]\n\n#Creating a column called \"Diagnose\" for classes                         \nDiagnose <- c(1:14349)\nwine_main<-data.frame(wine_main,Diagnose,merge)\nwine_main$Diagnose\nwine_main <- wine_main %>%\n  mutate(Diagnose = case_when(\n    wine_main$Score >=90 ~\"X1\",\n  TRUE ~\"X0\")) %>% \n  select(Diagnose,Score,Wine,Year,Price,everything())\nwine_main$Diagnose<-as.factor(wine_main$Diagnose)\nwine_main<- wine_main %>% select(-Year,-Wine,-Price,-Score)","metadata":{"_uuid":"6a6565a4-606e-4ce5-bdd2-7f8b840dcbab","_cell_guid":"ecf5df13-fdca-407a-95d1-0f2ebdd3a99f","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"Dataset has lots of columns which might cause an overfitting problem or lots of computational time. We need to reduce column size which known as \"dimension reduction\". \nWe will use RFI for this. Basicly it's gonna find the most effective columns, we can use other methods such as NZV (near zero variance). I've tried NZV it gives the same result with RFI.","metadata":{"_uuid":"1b951e64-2640-4626-8669-0ad1340df247","_cell_guid":"a7c35ace-0c92-46cf-9486-098cd7be6f5a","trusted":true}},{"cell_type":"code","source":"#Random forest for feature selection.\nrf_model <- randomForest(Diagnose ~ ., data = wine_main, importance = TRUE, ntree = 100)\nimportance_scores <- importance(rf_model, type = 1)\n\nif (is.matrix(importance_scores)) {\n  importance_values <- importance_scores[, 1] # Change 1 if another column is needed\n} else {\n  importance_values <- importance_scores\n}\n\n\nsorted_importance <- sort(importance_values, decreasing = TRUE)\nimportant_features <- names(sorted_importance)[1:50]\n\nX_reduced <- wine_main[,c(important_features)]\nDiagnose<-wine_main$Diagnose\nX_reduced<- data.frame(Diagnose,X_reduced)","metadata":{"_uuid":"5dae624e-3d72-4310-a3af-6c5b7f0f17ac","_cell_guid":"fb51722b-d554-4fe9-af68-2e2fa511a7b3","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"trainIndex <- createDataPartition(X_reduced$Diagnose, p = .7, \n                                  list = FALSE, \n                                  times = 1)\ntrain_data <- X_reduced[ trainIndex,]\ntest_data  <- X_reduced[-trainIndex,]","metadata":{"_uuid":"6f0f1321-6368-41df-89d7-87ba9e50626a","_cell_guid":"47813c89-77d4-4d23-9101-81f54d6b704d","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"We'll split dataset %70 training and %30 test. But with createDataPartion function we will easily split dataset according to class ratio in \"Diagnose\" column which is our key column. So basicly, in main dataset diagnose column has two levels which is 1 and 0. Ratio between em is 0.7 \"1\" class and 0.3 \"1\" class so we will keep this ratio in our training and test datasets too.","metadata":{"_uuid":"b3582e78-9a09-4cc8-9024-82bca6bb35dc","_cell_guid":"c7ae893f-855a-4547-8492-2cc3c99560ef","trusted":true}},{"cell_type":"markdown","source":"We have unbalanced classes which may cause low sensitiviy. To solve this we will use \"both\" method from \"ROSE\" package.","metadata":{"_uuid":"4d580346-1a74-457f-827b-5832ab7a1563","_cell_guid":"08a7c973-c8f6-43b9-bb08-89ef18fa7802","trusted":true}},{"cell_type":"code","source":"barplot(prop.table(table(X_reduced$Diagnose)),\n        col = rainbow(2),\n        ylim = c(0, 0.7),\n        main = \"Class Ratios\")","metadata":{"_uuid":"18404577-1446-4818-9255-3f82418a8eef","_cell_guid":"df82460c-ca7f-49dd-860e-7469c791159c","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"bothq <- ovun.sample(Diagnose~., data = train_data, method = \"both\")\ntrain_data<-bothq$data\n\nbarplot(prop.table(table( train_data$Diagnose)),\n        col = rainbow(2),\n        ylim = c(0, 0.7),\n        main = \"Class Ratios\")","metadata":{"_uuid":"97c796aa-0c9e-4627-8933-3dcaf2ed0015","_cell_guid":"5973dfbb-6bac-46a1-a190-c76be3658c2c","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"What \"both\" does is; method combines these two approaches by simultaneously over-sampling the minority class and under-sampling the majority class. This balanced approach aims to mitigate the disadvantages of both methods when used independently.","metadata":{"_uuid":"4553ebf9-1174-4bf6-9b94-b1bb1a2060b6","_cell_guid":"7c5ceeea-3df9-4c99-8bd7-00057570625c","trusted":true}},{"cell_type":"code","source":"train_control <- trainControl(\n  method = \"cv\",       # Cross-validation\n  number = 5,          # 5-fold cross-validation\n  classProbs = TRUE,   # Compute class probabilities\n  summaryFunction = twoClassSummary # Summary function for classification\n)","metadata":{"_uuid":"fedbf27a-89db-40b2-ad3e-ab6541282a9a","_cell_guid":"48ec50be-2bb8-4f9c-a591-c371fc62adf2","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"#Logistic Regression\nlogistic_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"glm\", \n  family = binomial, \n  trControl = train_control, \n  metric = \"ROC\"\n)\n# Random Forest\nrf_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"rf\", \n  trControl = train_control, \n  metric = \"ROC\"\n)\n\n# GBM\ngbm_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"gbm\", \n  trControl = train_control, \n  verbose = FALSE,\n  metric = \"ROC\"\n)\n\n# SVM\nsvm_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"svmRadial\", \n  trControl = train_control, \n  metric = \"ROC\"\n)\n\n# AdaBoost\nada_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"ada\", \n  trControl = train_control, \n  metric = \"ROC\"\n)\n\n\n# CART\ncart_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"rpart\", \n  trControl = train_control,\n    metric = \"ROC\"\n)\n\n# LDA\nlda_model <- train(\n  Diagnose ~ ., data = train_data, \n  method = \"lda\", \n  trControl = train_control, \n  metric = \"ROC\"\n)","metadata":{"_uuid":"059b7ff0-f2d9-47bb-9f27-36e0480fb430","_cell_guid":"723690a3-c7b9-4340-8ce5-b68eca45ec2f","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"# 5. Resample Comparison\nresults <- resamples(list(\n  LOG = logistic_model, \n  RF = rf_model, \n  GBM = gbm_model, \n  SVM = svm_model,\n  ADAB = ada_model, \n  CART = cart_model,\n  LDA = lda_model\n))\n\n# 6. Summary of the results\nsummary(results)\ndotplot(results)","metadata":{"_uuid":"ec309356-f5d3-43c9-a908-5ff9814877fc","_cell_guid":"fab72819-fe10-4a04-8bb7-8b93e16e01ee","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"Results are fine but they may lead to misinformation, because we used \"both\" function to create and eliminate some data. To see the real results we will use test dataset.","metadata":{"_uuid":"d18b4658-29ca-408e-bf20-38fec426719e","_cell_guid":"3eae5eb3-243d-494c-bd5c-e5f6a07b4ea7","trusted":true}},{"cell_type":"code","source":"# 7. Evaluate Models\n\n# Random Forest\nrf_preds <- predict(rf_model, newdata = test_data)\nrf_probs <- predict(rf_model, newdata = test_data, type = \"prob\")\nrf_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])\nprint(auc(rf_roc))","metadata":{"_uuid":"2d974594-58ed-4289-a798-ab3a0571cda9","_cell_guid":"ab02cb3a-260c-44d2-a728-4c73d6a0dc3c","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"#SVM\nsvm_preds <- predict(svm_model, newdata = test_data)\nsvm_probs <- predict(svm_model, newdata = test_data, type = \"prob\")\nsvm_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])\nprint(auc(svm_roc))","metadata":{"_uuid":"1d52b678-b555-4d37-b933-6232f842335a","_cell_guid":"002f4622-277c-489b-b823-8cd347f71211","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"#GBM\ngbm_preds <- predict(gbm_model, newdata = test_data)\ngbm_probs <- predict(gbm_model, newdata = test_data, type = \"prob\")\ngbm_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])\nprint(auc(gbm_roc))","metadata":{"_uuid":"d1fe5e7b-5ed8-4f8a-a973-00e2d3d0e107","_cell_guid":"d7514764-a7e5-44ba-baa2-cb0476d17e23","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"code","source":"# Confusion Matrices\nprint(confusionMatrix(rf_preds, test_data$Diagnose))\nprint(confusionMatrix(svm_preds, test_data$Diagnose))\nprint(confusionMatrix(gbm_preds, test_data$Diagnose))","metadata":{"_uuid":"5d697fc4-90d0-4cb3-9561-9ac88db69eeb","_cell_guid":"5005f970-e476-45ca-bda1-72bdfeaa7229","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]},{"cell_type":"markdown","source":"What we should look is the \"balanced accuracy\". Because dataset has unbalanced classes. Which may cause models to provide good accuracy but model will correctly predict one class significantly better\nthan the other class.","metadata":{"_uuid":"fbb32736-82a2-4313-9905-0c2db41257c5","_cell_guid":"bcf0a630-6943-4a44-83e2-76a8afa48890","trusted":true}},{"cell_type":"code","source":"varimp_rf <- varImp(rf_model)\nplot(varimp_rf, main=\"Most valuable columns for rf\")\n\nvarimp_svm <- varImp(svm_model)\nplot(varimp_svm, main=\"Most valuable columns for svm\")","metadata":{"_uuid":"f98d370a-e946-4529-b7cf-caed30399ece","_cell_guid":"3c13ab53-bd0e-4b67-99d5-33c12ffba952","collapsed":false,"jupyter":{"outputs_hidden":false},"trusted":true},"execution_count":null,"outputs":[]}]}
+library(caret)
+library(randomForest)
+library(dplyr)
+library(tidyverse)
+library(ROSE)
+library(ada)
+library(pROC)
+
+#Creating the dataset
+wine<-read_csv("/kaggle/input/bordeaux-wine-reviews-from-2000-to-2016/BordeauxWines.csv")
+#To seperate first four columns so we can do the transformation.
+merge<-wine[,1:4]
+wine<-wine[,-1:-4]
+#Transforming double's to factors
+wine<- wine %>% mutate_if(is.double,as.factor)
+
+#To remove which only has one level.
+cols_to_remove <- sapply(wine, function(x) is.factor(x) && length(levels(x)) == 1)
+wine_main<-wine[,!cols_to_remove]
+
+#Creating a column called "Diagnose" for classes                         
+Diagnose <- c(1:14349)
+wine_main<-data.frame(wine_main,Diagnose,merge)
+wine_main$Diagnose
+wine_main <- wine_main %>%
+  mutate(Diagnose = case_when(
+    wine_main$Score >=90 ~"X1",
+  TRUE ~"X0")) %>% 
+  select(Diagnose,Score,Wine,Year,Price,everything())
+wine_main$Diagnose<-as.factor(wine_main$Diagnose)
+wine_main<- wine_main %>% select(-Year,-Wine,-Price,-Score)
+
+
+#Random forest for feature selection.
+rf_model <- randomForest(Diagnose ~ ., data = wine_main, importance = TRUE, ntree = 100)
+importance_scores <- importance(rf_model, type = 1)
+
+if (is.matrix(importance_scores)) {
+  importance_values <- importance_scores[, 1] # Change 1 if another column is needed
+} else {
+  importance_values <- importance_scores
+}
+
+
+sorted_importance <- sort(importance_values, decreasing = TRUE)
+important_features <- names(sorted_importance)[1:50]
+
+X_reduced <- wine_main[,c(important_features)]
+Diagnose<-wine_main$Diagnose
+X_reduced<- data.frame(Diagnose,X_reduced)
+trainIndex <- createDataPartition(X_reduced$Diagnose, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+train_data <- X_reduced[ trainIndex,]
+test_data  <- X_reduced[-trainIndex,]
+
+barplot(prop.table(table(X_reduced$Diagnose)),
+        col = rainbow(2),
+        ylim = c(0, 0.7),
+        main = "Class Ratios")
+
+bothq <- ovun.sample(Diagnose~., data = train_data, method = "both")
+train_data<-bothq$data
+
+barplot(prop.table(table( train_data$Diagnose)),
+        col = rainbow(2),
+        ylim = c(0, 0.7),
+        main = "Class Ratios")
+
+train_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # 5-fold cross-validation
+  classProbs = TRUE,   # Compute class probabilities
+  summaryFunction = twoClassSummary # Summary function for classification
+)                         
+
+logistic_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "glm", 
+  family = binomial, 
+  trControl = train_control, 
+  metric = "ROC"
+)
+# Random Forest
+rf_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "rf", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+# GBM
+gbm_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "gbm", 
+  trControl = train_control, 
+  verbose = FALSE,
+  metric = "ROC"
+)
+
+# SVM
+svm_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "svmRadial", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+# AdaBoost
+ada_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "ada", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+
+# CART
+cart_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "rpart", 
+  trControl = train_control,
+    metric = "ROC"
+)
+
+# LDA
+lda_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "lda", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+# 5. Resample Comparison
+results <- resamples(list(
+  LOG = logistic_model, 
+  RF = rf_model, 
+  GBM = gbm_model, 
+  SVM = svm_model,
+  ADAB = ada_model, 
+  CART = cart_model,
+  LDA = lda_model
+))
+
+# 6. Summary of the results
+summary(results)
+dotplot(results)
+
+# Random Forest
+rf_preds <- predict(rf_model, newdata = test_data)
+rf_probs <- predict(rf_model, newdata = test_data, type = "prob")
+rf_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(rf_roc))
+# Random Forest
+rf_preds <- predict(rf_model, newdata = test_data)
+rf_probs <- predict(rf_model, newdata = test_data, type = "prob")
+rf_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(rf_roc))
+
+#GBM
+gbm_preds <- predict(gbm_model, newdata = test_data)
+gbm_probs <- predict(gbm_model, newdata = test_data, type = "prob")
+gbm_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(gbm_roc))
+
+# Confusion Matrices
+print(confusionMatrix(rf_preds, test_data$Diagnose))
+print(confusionMatrix(svm_preds, test_data$Diagnose))
+print(confusionMatrix(gbm_preds, test_data$Diagnose))
+
+
+#Necessary packages.
+library(caret)
+library(randomForest)
+library(dplyr)
+library(tidyverse)
+library(ROSE)
+library(ada)
+library(pROC)
+Loading required package: ggplot2
+
+Loading required package: lattice
+
+
+Attaching package: ‘caret’
+
+
+The following object is masked from ‘package:httr’:
+
+    progress
+
+
+randomForest 4.6-14
+
+Type rfNews() to see new features/changes/bug fixes.
+
+
+Attaching package: ‘randomForest’
+
+
+The following object is masked from ‘package:ggplot2’:
+
+    margin
+
+
+
+Attaching package: ‘dplyr’
+
+
+The following object is masked from ‘package:randomForest’:
+
+    combine
+
+
+The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+
+The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+
+── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+✔ forcats   1.0.0     ✔ stringr   1.5.1
+✔ lubridate 1.9.3     ✔ tibble    3.2.1
+✔ purrr     1.0.2     ✔ tidyr     1.3.0
+✔ readr     2.1.4     
+── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::combine()       masks randomForest::combine()
+✖ dplyr::filter()        masks stats::filter()
+✖ dplyr::lag()           masks stats::lag()
+✖ purrr::lift()          masks caret::lift()
+✖ randomForest::margin() masks ggplot2::margin()
+✖ caret::progress()      masks httr::progress()
+ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+Loaded ROSE 0.0-4
+
+
+Loading required package: rpart
+
+Type 'citation("pROC")' for a citation.
+
+
+Attaching package: ‘pROC’
+
+
+The following objects are masked from ‘package:stats’:
+
+    cov, smooth, var
+
+
+#Creating the dataset
+wine<-read_csv("/kaggle/input/bordeaux-wine-reviews-from-2000-to-2016/BordeauxWines.csv")
+#To seperate first four columns so we can do the transformation.
+merge<-wine[,1:4]
+wine<-wine[,-1:-4]
+#Transforming double's to factors
+wine<- wine %>% mutate_if(is.double,as.factor)
+Rows: 14349 Columns: 989
+── Column specification ────────────────────────────────────────────────────────
+Delimiter: ","
+chr   (2): Wine, Price
+dbl (987): Year, Score, BLOOD ORANGE, CITRUS, CITRUS PEEL, CITRUS ZEST, CLEM...
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+First we need to check data types for better analysis. All of the columns except first four column coded as double but they need to be two levelled factors.Some factors only has one level which is "0". This creates zero variance so that is not gonna effect the model because of that, we will remove them. What we are looking for is what makes a wine good. So we will group scores as 1 and 0 which means 90+ score wines and 90- score wines. To do this we will create a column called "Diagnose"
+
+#To remove which only has one level.
+cols_to_remove <- sapply(wine, function(x) is.factor(x) && length(levels(x)) == 1)
+wine_main<-wine[,!cols_to_remove]
+
+#Creating a column called "Diagnose" for classes                         
+Diagnose <- c(1:14349)
+wine_main<-data.frame(wine_main,Diagnose,merge)
+wine_main$Diagnose
+wine_main <- wine_main %>%
+  mutate(Diagnose = case_when(
+    wine_main$Score >=90 ~"X1",
+  TRUE ~"X0")) %>% 
+  select(Diagnose,Score,Wine,Year,Price,everything())
+wine_main$Diagnose<-as.factor(wine_main$Diagnose)
+wine_main<- wine_main %>% select(-Year,-Wine,-Price,-Score)
+123456789101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899100101102103104105106107108109110111112113114115116117118119120121122123124125126127128129130131132133134135136137138139140141142143144145146147148149150151152153154155156157158159160161162163164165166167168169170171172173174175176177178179180181182183184185186187188189190191192193194195196197198199200⋯1415014151141521415314154141551415614157141581415914160141611416214163141641416514166141671416814169141701417114172141731417414175141761417714178141791418014181141821418314184141851418614187141881418914190141911419214193141941419514196141971419814199142001420114202142031420414205142061420714208142091421014211142121421314214142151421614217142181421914220142211422214223142241422514226142271422814229142301423114232142331423414235142361423714238142391424014241142421424314244142451424614247142481424914250142511425214253142541425514256142571425814259142601426114262142631426414265142661426714268142691427014271142721427314274142751427614277142781427914280142811428214283142841428514286142871428814289142901429114292142931429414295142961429714298142991430014301143021430314304143051430614307143081430914310143111431214313143141431514316143171431814319143201432114322143231432414325143261432714328143291433014331143321433314334143351433614337143381433914340143411434214343143441434514346143471434814349
+Dataset has lots of columns which might cause an overfitting problem or lots of computational time. We need to reduce column size which known as "dimension reduction". We will use RFI for this. Basicly it's gonna find the most effective columns, we can use other methods such as NZV (near zero variance). I've tried NZV it gives the same result with RFI.
+
+#Random forest for feature selection.
+rf_model <- randomForest(Diagnose ~ ., data = wine_main, importance = TRUE, ntree = 100)
+importance_scores <- importance(rf_model, type = 1)
+
+if (is.matrix(importance_scores)) {
+  importance_values <- importance_scores[, 1] # Change 1 if another column is needed
+} else {
+  importance_values <- importance_scores
+}
+
+
+sorted_importance <- sort(importance_values, decreasing = TRUE)
+important_features <- names(sorted_importance)[1:50]
+
+X_reduced <- wine_main[,c(important_features)]
+Diagnose<-wine_main$Diagnose
+X_reduced<- data.frame(Diagnose,X_reduced)
+trainIndex <- createDataPartition(X_reduced$Diagnose, p = .7, 
+                                  list = FALSE, 
+                                  times = 1)
+train_data <- X_reduced[ trainIndex,]
+test_data  <- X_reduced[-trainIndex,]
+We'll split dataset %70 training and %30 test. But with createDataPartion function we will easily split dataset according to class ratio in "Diagnose" column which is our key column. So basicly, in main dataset diagnose column has two levels which is 1 and 0. Ratio between em is 0.7 "1" class and 0.3 "1" class so we will keep this ratio in our training and test datasets too.
+
+We have unbalanced classes which may cause low sensitiviy. To solve this we will use "both" method from "ROSE" package.
+
+barplot(prop.table(table(X_reduced$Diagnose)),
+        col = rainbow(2),
+        ylim = c(0, 0.7),
+        main = "Class Ratios")
+No description has been provided for this image
+bothq <- ovun.sample(Diagnose~., data = train_data, method = "both")
+train_data<-bothq$data
+
+barplot(prop.table(table( train_data$Diagnose)),
+        col = rainbow(2),
+        ylim = c(0, 0.7),
+        main = "Class Ratios")
+No description has been provided for this image
+What "both" does is; method combines these two approaches by simultaneously over-sampling the minority class and under-sampling the majority class. This balanced approach aims to mitigate the disadvantages of both methods when used independently.
+
+train_control <- trainControl(
+  method = "cv",       # Cross-validation
+  number = 5,          # 5-fold cross-validation
+  classProbs = TRUE,   # Compute class probabilities
+  summaryFunction = twoClassSummary # Summary function for classification
+)
+#Logistic Regression
+logistic_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "glm", 
+  family = binomial, 
+  trControl = train_control, 
+  metric = "ROC"
+)
+# Random Forest
+rf_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "rf", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+# GBM
+gbm_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "gbm", 
+  trControl = train_control, 
+  verbose = FALSE,
+  metric = "ROC"
+)
+
+# SVM
+svm_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "svmRadial", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+# AdaBoost
+ada_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "ada", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+
+
+# CART
+cart_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "rpart", 
+  trControl = train_control,
+    metric = "ROC"
+)
+
+# LDA
+lda_model <- train(
+  Diagnose ~ ., data = train_data, 
+  method = "lda", 
+  trControl = train_control, 
+  metric = "ROC"
+)
+line search fails -1.917239 0.005370928 1.244651e-05 -6.50073e-06 -1.8522e-08 9.329662e-09 -2.911839e-13
+Warning message in method$predict(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class prediction calculations failed; returning NAs”
+Warning message in method$prob(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class probability calculations failed; returning NAs”
+Warning message in data.frame(..., check.names = FALSE):
+“row names were found from a short variable and have been discarded”
+line search fails -1.951916 0.03288434 1.277875e-05 -6.873433e-06 -1.992422e-08 1.017287e-08 -3.245293e-13
+Warning message in method$predict(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class prediction calculations failed; returning NAs”
+Warning message in method$prob(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class probability calculations failed; returning NAs”
+Warning message in data.frame(..., check.names = FALSE):
+“row names were found from a short variable and have been discarded”
+line search fails -1.876663 -0.05272459 1.133491e-05 -5.538233e-06 -1.540632e-08 7.216411e-09 -2.145954e-13
+Warning message in method$predict(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class prediction calculations failed; returning NAs”
+Warning message in method$prob(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class probability calculations failed; returning NAs”
+Warning message in data.frame(..., check.names = FALSE):
+“row names were found from a short variable and have been discarded”
+line search fails -1.948997 0.01694277 2.051767e-05 -1.153854e-05 -3.071045e-08 1.672382e-08 -8.230753e-13
+Warning message in method$predict(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class prediction calculations failed; returning NAs”
+Warning message in method$prob(modelFit = modelFit, newdata = newdata, submodels = param):
+“kernlab class probability calculations failed; returning NAs”
+Warning message in data.frame(..., check.names = FALSE):
+“row names were found from a short variable and have been discarded”
+Warning message in nominalTrainWorkflow(x = x, y = y, wts = weights, info = trainInfo, :
+“There were missing values in resampled performance measures.”
+# 5. Resample Comparison
+results <- resamples(list(
+  LOG = logistic_model, 
+  RF = rf_model, 
+  GBM = gbm_model, 
+  SVM = svm_model,
+  ADAB = ada_model, 
+  CART = cart_model,
+  LDA = lda_model
+))
+
+# 6. Summary of the results
+summary(results)
+dotplot(results)
+Call:
+summary.resamples(object = results)
+
+Models: LOG, RF, GBM, SVM, ADAB, CART, LDA 
+Number of resamples: 5 
+
+ROC 
+          Min.   1st Qu.    Median      Mean   3rd Qu.      Max. NA's
+LOG  0.9090527 0.9114828 0.9115026 0.9144897 0.9195272 0.9208835    0
+RF   0.9208736 0.9219875 0.9242501 0.9252130 0.9268115 0.9321424    0
+GBM  0.9050904 0.9133316 0.9148965 0.9151222 0.9152632 0.9270295    0
+SVM  0.9169237 0.9169980 0.9170723 0.9189410 0.9199496 0.9228269    2
+ADAB 0.8816706 0.8877027 0.8888276 0.8896599 0.8932728 0.8968259    0
+CART 0.7736844 0.7799290 0.7814261 0.7883699 0.8007964 0.8060134    0
+LDA  0.9028536 0.9034437 0.9064532 0.9094940 0.9164589 0.9182606    0
+
+Sens 
+          Min.   1st Qu.    Median      Mean   3rd Qu.      Max. NA's
+LOG  0.8424726 0.8454636 0.8525896 0.8528709 0.8554337 0.8683948    0
+RF   0.8693918 0.8834661 0.8843470 0.8837720 0.8883350 0.8933200    0
+GBM  0.8047809 0.8255234 0.8305085 0.8333390 0.8464606 0.8594217    0
+SVM  0.8364905 0.8369890 0.8374875 0.8391492 0.8404786 0.8434696    2
+ADAB 0.8215354 0.8315055 0.8325025 0.8377183 0.8426295 0.8604187    0
+CART 0.8384845 0.8494516 0.8514457 0.8530689 0.8595618 0.8664008    0
+LDA  0.8386454 0.8454636 0.8514457 0.8524748 0.8574277 0.8693918    0
+
+Spec 
+          Min.   1st Qu.    Median      Mean   3rd Qu.      Max. NA's
+LOG  0.8081511 0.8220676 0.8270378 0.8258449 0.8320080 0.8399602    0
+RF   0.8439364 0.8538767 0.8598410 0.8592445 0.8628231 0.8757455    0
+GBM  0.8170974 0.8349901 0.8369781 0.8337972 0.8379722 0.8419483    0
+SVM  0.8648111 0.8712724 0.8777336 0.8737575 0.8782306 0.8787276    2
+ADAB 0.7455268 0.7524851 0.7564612 0.7562624 0.7604374 0.7664016    0
+CART 0.6113320 0.6252485 0.6282306 0.6463221 0.6779324 0.6888668    0
+LDA  0.7862823 0.7932406 0.8031809 0.7986083 0.8031809 0.8071571    0
+No description has been provided for this image
+Results are fine but they may lead to misinformation, because we used "both" function to create and eliminate some data. To see the real results we will use test dataset.
+
+# 7. Evaluate Models
+
+# Random Forest
+rf_preds <- predict(rf_model, newdata = test_data)
+rf_probs <- predict(rf_model, newdata = test_data, type = "prob")
+rf_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(rf_roc))
+Setting levels: control = X0, case = X1
+
+Setting direction: controls < cases
+
+Area under the curve: 0.8727
+#SVM
+svm_preds <- predict(svm_model, newdata = test_data)
+svm_probs <- predict(svm_model, newdata = test_data, type = "prob")
+svm_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(svm_roc))
+Setting levels: control = X0, case = X1
+
+Setting direction: controls < cases
+
+Area under the curve: 0.8727
+#GBM
+gbm_preds <- predict(gbm_model, newdata = test_data)
+gbm_probs <- predict(gbm_model, newdata = test_data, type = "prob")
+gbm_roc <- roc(response = test_data$Diagnose, predictor = rf_probs[,2])
+print(auc(gbm_roc))
+Setting levels: control = X0, case = X1
+
+
+# Confusion Matrices
+print(confusionMatrix(rf_preds, test_data$Diagnose))
+print(confusionMatrix(svm_preds, test_data$Diagnose))
+print(confusionMatrix(gbm_preds, test_data$Diagnose))
+Confusion Matrix and Statistics
+
+
+
+                         
