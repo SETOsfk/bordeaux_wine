@@ -1,1 +1,4 @@
+> **2026:** Bu 2024 ders projesi baştan yeniden yapıldı — sızıntı kontrollü doğrulama, Python + R, peynir eşleşmesi ve Türk muadilleri: **[SETOsfk/wineapp](https://github.com/SETOsfk/wineapp)** · canlı uygulama: [setosfk.github.io/projects/bordeaux-wine](https://setosfk.github.io/projects/bordeaux-wine/)
+> *This 2024 course project was redone from scratch in 2026 — see [SETOsfk/wineapp](https://github.com/SETOsfk/wineapp).*
+
 İleri istatistiksel yazılımlar final projesi için, ekte verilen veri setinin analizi gerçekleştirilecektir.Oluşturulan bu rapor, 21. yüzyıl Bordeaux şaraplarını anlamak için gerekli tekniklerini kullanarak yapılan kapsamlı bir çalışmayı sunmaktadır. Bordeaux, Fransa'nın en ünlü şarap bölgesi olarak kabul edilir ve dünya çapında büyük bir şöhrete sahiptir. Bu çalışmada, 2000-2016 yılları arasında üretilen Bordeaux şaraplarını içeren veri seti incelenmiştir. 
